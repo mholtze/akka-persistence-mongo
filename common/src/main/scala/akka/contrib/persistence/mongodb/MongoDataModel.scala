@@ -145,7 +145,7 @@ object Payload {
 }
 
 
-case class Event(pid: String, sn: Long, payload: Payload, sender: Option[ActorRef] = None, manifest: Option[String] = None, writerUuid: Option[String] = None) {
+case class Event(pid: String, sn: Long, gsn: Long, payload: Payload, sender: Option[ActorRef] = None, manifest: Option[String] = None, writerUuid: Option[String] = None) {
   def toRepr = payload match {
     case l:Legacy =>
       l.content.update(persistenceId = pid, sequenceNr = sn)
@@ -179,11 +179,12 @@ case class Event(pid: String, sn: Long, payload: Payload, sender: Option[ActorRe
 }
 
 object Event {
-  def apply[D](useLegacySerialization: Boolean)(repr: PersistentRepr)(implicit ser: Serialization, ev: Manifest[D], dt: DocumentType[D]): Event =
+  def apply[D](useLegacySerialization: Boolean)(repr: PersistentRepr, gsn: Long)(implicit ser: Serialization, ev: Manifest[D], dt: DocumentType[D]): Event =
   if (useLegacySerialization)
     Event(
       pid = repr.persistenceId,
       sn = repr.sequenceNr,
+      gsn = gsn,
       payload = Payload(repr),
       sender = Option(repr.sender),
       manifest = Option(repr.manifest).filterNot(_ == PersistentRepr.Undefined),
@@ -193,6 +194,7 @@ object Event {
     Event(
       pid = repr.persistenceId,
       sn = repr.sequenceNr,
+      gsn = gsn,
       payload = Payload(repr.payload),
       sender = Option(repr.sender),
       manifest = Option(repr.manifest).filterNot(_ == PersistentRepr.Undefined),
@@ -204,14 +206,19 @@ object Event {
   }
 }
 
-case class Atom(pid: String, from: Long, to: Long, events: ISeq[Event])
+case class Atom(pid: String, from: Long, to: Long, globalFrom: Long, globalTo: Long, events: ISeq[Event])
 
 object Atom {
-  def apply[D](aw: AtomicWrite, useLegacySerialization: Boolean)(implicit ser: Serialization, ev: Manifest[D], dt: DocumentType[D]): Atom = {
+  def apply[D](aw: AtomicWrite, globalFrom: Long, globalTo: Long, useLegacySerialization: Boolean)(implicit ser: Serialization, ev: Manifest[D], dt: DocumentType[D]): Atom = {
     Atom(pid = aw.persistenceId,
       from = aw.lowestSequenceNr,
       to = aw.highestSequenceNr,
-      events = aw.payload.map(Event.apply(useLegacySerialization)(_)(ser,ev,dt)))
+      globalFrom = globalFrom,
+      globalTo = globalTo,
+      events = aw.payload.zipWithIndex.map(x => Event.apply(useLegacySerialization)(x._1, globalFrom + x._2.toLong)(ser,ev,dt)))
   }
 }
 
+case class SeqRange(from: Long, size: Int) {
+  def to: Long = from + size.toLong - 1L
+}
