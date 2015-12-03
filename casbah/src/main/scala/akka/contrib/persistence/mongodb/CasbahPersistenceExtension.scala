@@ -58,8 +58,8 @@ class CasbahMongoDriver(system: ActorSystem, config: Config) extends MongoPersis
     logger.info(s"Journal automatic upgrade found $cnt records needing upgrade")
     if(cnt > 0) {
       val results = j.find[DBObject](q)
-       .map(d => d.as[ObjectId]("_id") -> Event[DBObject](useLegacySerialization)(deserializeJournal(d).toRepr))
-       .map{case (id,ev) => j.update("_id" $eq id, serializeJournal(Atom(ev.pid, ev.sn, ev.sn, ISeq(ev))))}
+       .map(d => d.as[ObjectId]("_id") -> Event[DBObject](useLegacySerialization)(deserializeJournal(d).toRepr, d.getAs[Long](GLOBAL_SEQUENCE_NUMBER).getOrElse(0L)))
+       .map{case (id,ev) => j.update("_id" $eq id, serializeJournal(Atom(ev.pid, ev.sn, ev.sn, ev.gsn, ev.gsn, ISeq(ev))))}
       results.foldLeft((0, 0)) { case ((successes, failures), result) =>
         val n = result.getN
         if (n > 0)
@@ -93,7 +93,6 @@ class CasbahMongoDriver(system: ActorSystem, config: Config) extends MongoPersis
       MongoDBObject("unique" -> true, "name" -> indexName))
     collection
   }
-
 }
 
 class CasbahPersistenceExtension(val actorSystem: ActorSystem) extends MongoPersistenceExtension {
