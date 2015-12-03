@@ -38,7 +38,7 @@ class CasbahPersistenceJournallerSpec extends TestKit(ActorSystem("unit-test")) 
 
   "A mongo journal implementation" should "serialize and deserialize non-confirmable data" in { new Fixture {
 
-    val repr = Atom(pid = "pid", from = 1L, to = 1L, events = ISeq(Event(pid = "pid", sn = 1L, payload = "TEST")))
+    val repr = Atom(pid = "pid", from = 1L, to = 1L, globalFrom = 101L, globalTo = 101L, events = ISeq(Event(pid = "pid", sn = 1L, gsn = 101L, payload = "TEST")))
 
     val serialized = serializeAtom(repr)
 
@@ -47,12 +47,15 @@ class CasbahPersistenceJournallerSpec extends TestKit(ActorSystem("unit-test")) 
     atom.getAs[String](PROCESSOR_ID) shouldBe Some("pid")
     atom.getAs[Long](FROM) shouldBe Some(1L)
     atom.getAs[Long](TO) shouldBe Some(1L)
+    atom.getAs[Long](GLOBAL_FROM) shouldBe Some(101L)
+    atom.getAs[Long](GLOBAL_TO) shouldBe Some(101L)
 
     val deserialized = deserializeDocument(serialized.firstEvent)
 
     deserialized.payload shouldBe StringPayload("TEST")
     deserialized.pid should be("pid")
     deserialized.sn should be(1)
+    deserialized.gsn should be(101)
     deserialized.manifest shouldBe empty
     deserialized.sender shouldBe empty
   }
@@ -68,7 +71,7 @@ class CasbahPersistenceJournallerSpec extends TestKit(ActorSystem("unit-test")) 
   () }
 
   it should "insert journal records" in { new Fixture { withJournal { journal =>
-    underTest.batchAppend(ISeq(AtomicWrite(records)))
+    underTest.batchAppend(ISeq(AtomicWrite(records)), 101L)
 
     journal.size should be(1)
 
@@ -78,16 +81,19 @@ class CasbahPersistenceJournallerSpec extends TestKit(ActorSystem("unit-test")) 
     atom(PROCESSOR_ID) should be("unit-test")
     atom(FROM) should be(1)
     atom(TO) should be(3)
+    atom(GLOBAL_FROM) should be(101)
+    atom(GLOBAL_TO) should be(103)
     val event = atom.as[MongoDBList](EVENTS).as[DBObject](0)
     event(PROCESSOR_ID) should be("unit-test")
     event(SEQUENCE_NUMBER) should be(1)
+    event(GLOBAL_SEQUENCE_NUMBER) should be(101)
     event(PayloadKey) should be("payload")
     event(MANIFEST) should be ("M")
   }}
   () }
 
   it should "hard delete journal entries" in { new Fixture { withJournal { journal =>
-    underTest.batchAppend(ISeq(AtomicWrite(records)))
+    underTest.batchAppend(ISeq(AtomicWrite(records)), 101L)
 
     underTest.deleteFrom("unit-test", 2L)
 
@@ -96,13 +102,19 @@ class CasbahPersistenceJournallerSpec extends TestKit(ActorSystem("unit-test")) 
     recone(PROCESSOR_ID) should be("unit-test")
     recone(FROM) should be(3)
     recone(TO) should be(3)
+
+    // The global from/to are not changed during a delete. They don't need to be changed since their only
+    // purpose is log read ordering.
+    recone(GLOBAL_FROM) should be(101)
+    recone(GLOBAL_TO) should be(103)
+
     val events = recone.as[MongoDBList](EVENTS)
     events should have size 1
   }}
   () }
   
   it should "replay journal entries for a single atom" in { new Fixture { withJournal { journal =>
-    underTest.batchAppend(ISeq(AtomicWrite(records)))
+    underTest.batchAppend(ISeq(AtomicWrite(records)), 101L)
 
     val buf = mutable.Buffer[PersistentRepr]()
     underTest.replayJournal("unit-test", 2, 3, 10)(replay(buf)).value.get.get
@@ -112,7 +124,7 @@ class CasbahPersistenceJournallerSpec extends TestKit(ActorSystem("unit-test")) 
   () }
 
   it should "replay journal entries for multiple atoms" in { new Fixture { withJournal { journal =>
-    records.foreach(r => underTest.batchAppend(ISeq(AtomicWrite(r))))
+    records.foreach(r => underTest.batchAppend(ISeq(AtomicWrite(r)), 101L))
 
     val buf = mutable.Buffer[PersistentRepr]()
     underTest.replayJournal("unit-test", 2, 3, 10)(replay(buf)).value.get.get
@@ -128,7 +140,7 @@ class CasbahPersistenceJournallerSpec extends TestKit(ActorSystem("unit-test")) 
   () }
 
   it should "calculate the max sequence nr" in { new Fixture { withJournal { journal =>
-    underTest.batchAppend(ISeq(AtomicWrite(records)))
+    underTest.batchAppend(ISeq(AtomicWrite(records)), 101L)
 
     val result = underTest.maxSequenceNr("unit-test", 2).value.get.get
     result should be (3)
@@ -137,7 +149,7 @@ class CasbahPersistenceJournallerSpec extends TestKit(ActorSystem("unit-test")) 
 
   it should "support BSON payloads as MongoDBObjects" in { new Fixture { withJournal { journal =>
     val documents = List(1L,2L,3L).map(sn => PersistentRepr(persistenceId = "unit-test", sequenceNr = sn, payload = MongoDBObject("foo" -> "bar", "baz" -> 1)))
-    underTest.batchAppend(ISeq(AtomicWrite(documents)))
+    underTest.batchAppend(ISeq(AtomicWrite(documents)), 101L)
     val results = journal.find().limit(1)
       .one()
       .as[MongoDBList](EVENTS).collect({case x:DBObject => x})
@@ -145,6 +157,7 @@ class CasbahPersistenceJournallerSpec extends TestKit(ActorSystem("unit-test")) 
     val first = results.head
     first.getAs[String](PROCESSOR_ID) shouldBe Option("unit-test")
     first.getAs[Long](SEQUENCE_NUMBER) shouldBe Option(1)
+    first.getAs[Long](GLOBAL_SEQUENCE_NUMBER) shouldBe Option(101)
     first.getAs[String](TYPE) shouldBe Option("bson")
     val payload = first.as[MongoDBObject](PayloadKey)
     payload.getAs[String]("foo") shouldBe Option("bar")
@@ -157,7 +170,7 @@ class CasbahPersistenceJournallerSpec extends TestKit(ActorSystem("unit-test")) 
     val ar = system.deadLetters
     val msg = akka.cluster.sharding.ShardCoordinator.Internal.ShardRegionRegistered(ar)
     val withSerializedObjects = records.map(_.withPayload(msg))
-    val result =  underTest.batchAppend(ISeq(AtomicWrite(withSerializedObjects)))
+    val result =  underTest.batchAppend(ISeq(AtomicWrite(withSerializedObjects)), 101L)
 
     val writeResult = Await.result(result,5.seconds)
     writeResult.foreach(wr => wr shouldBe 'success)
@@ -173,7 +186,7 @@ class CasbahPersistenceJournallerSpec extends TestKit(ActorSystem("unit-test")) 
   it should "support old-school Serializable payloads" in { new Fixture { withJournal {journal =>
     val msg = system.deadLetters
     val withSerializedObjects = records.map(_.withPayload(msg))
-    val result =  underTest.batchAppend(ISeq(AtomicWrite(withSerializedObjects)))
+    val result =  underTest.batchAppend(ISeq(AtomicWrite(withSerializedObjects)), 101L)
 
     val writeResult = Await.result(result,5.seconds)
     writeResult.foreach(wr => wr shouldBe 'success)

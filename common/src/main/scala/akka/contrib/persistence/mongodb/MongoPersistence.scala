@@ -88,6 +88,10 @@ abstract class MongoPersistenceDriver(as: ActorSystem, config: Config) {
     val journalCollection = collection(journalCollectionName)
     val indexed = ensureUniqueIndex(journalCollection, journalIndexName,
                       JournallingFieldNames.PROCESSOR_ID -> 1, FROM -> 1, TO -> 1)(concurrent.ExecutionContext.Implicits.global)
+
+    ensureUniqueIndex(journalCollection, journalGlobalIndexName,
+        GLOBAL_FROM -> 1, GLOBAL_TO -> 1)(concurrent.ExecutionContext.Implicits.global)
+
     if (settings.JournalAutomaticUpgrade) {
       logger.info("Journal automatic upgrade is enabled, executing upgrade process")
       upgradeJournalIfNeeded()
@@ -115,6 +119,7 @@ abstract class MongoPersistenceDriver(as: ActorSystem, config: Config) {
   def journalWriteSafety: WriteSafety = settings.JournalWriteConcern
   def journalWTimeout = settings.JournalWTimeout
   def journalFsync = settings.JournalFSync
+  def journalGlobalIndexName = settings.JournalGlobalIndex
   def mongoUri = settings.MongoUri
   def useLegacySerialization = settings.UseLegacyJournalSerialization
 

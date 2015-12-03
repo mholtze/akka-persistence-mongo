@@ -27,6 +27,7 @@ object CasbahSerializers extends JournallingFieldNames {
     private def deserializeVersionOne(d: DBObject)(implicit serialization: Serialization, system: ActorSystem) = Event(
       pid = d.as[String](PROCESSOR_ID),
       sn = d.as[Long](SEQUENCE_NUMBER),
+      gsn = d.getAs[Long](GLOBAL_SEQUENCE_NUMBER).getOrElse(0L),
       payload = Payload[DBObject](d.as[String](TYPE),d.as[Any](PayloadKey),d.getAs[String](HINT),d.getAs[String](SER_MANIFEST)),
       sender = d.getAs[Array[Byte]](SenderKey).flatMap(serialization.deserialize(_, classOf[ActorRef]).toOption),
       manifest = d.getAs[String](MANIFEST),
@@ -41,6 +42,7 @@ object CasbahSerializers extends JournallingFieldNames {
           Event(
             pid = persistenceId,
             sn = sequenceNr,
+            gsn = 0L,
             payload = Bson(b.as[DBObject](PayloadKey)),
             sender = b.getAs[Array[Byte]](SenderKey).flatMap(serialization.deserialize(_, classOf[ActorRef]).toOption),
             manifest = None,
@@ -49,7 +51,7 @@ object CasbahSerializers extends JournallingFieldNames {
         case _ =>
           val content = d.as[Array[Byte]](SERIALIZED)
           val repr = Serialized(content, classOf[PersistentRepr], None)
-          Event[DBObject](useLegacySerialization = false)(repr.content).copy(pid = persistenceId, sn = sequenceNr)
+          Event[DBObject](useLegacySerialization = false)(repr.content, 0L).copy(pid = persistenceId, sn = sequenceNr)
       }
 
     }
@@ -62,6 +64,8 @@ object CasbahSerializers extends JournallingFieldNames {
         PROCESSOR_ID -> atom.pid,
         FROM -> atom.from,
         TO -> atom.to,
+        GLOBAL_FROM -> atom.globalFrom,
+        GLOBAL_TO -> atom.globalTo,
         EVENTS -> MongoDBList(atom.events.map(serializeEvent): _*),
         VERSION -> 1
       )
@@ -72,6 +76,7 @@ object CasbahSerializers extends JournallingFieldNames {
           VERSION -> 1 ::
             PROCESSOR_ID -> event.pid ::
             SEQUENCE_NUMBER -> event.sn ::
+            GLOBAL_SEQUENCE_NUMBER -> event.gsn ::
             Nil
         ))
       (for {

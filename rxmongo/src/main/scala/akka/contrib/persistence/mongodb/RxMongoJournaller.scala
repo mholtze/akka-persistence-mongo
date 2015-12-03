@@ -44,12 +44,26 @@ class RxMongoJournaller(driver: RxMongoDriver) extends MongoPersistenceJournalli
     else throw wr
   }
 
-  private[mongodb] override def batchAppend(writes: ISeq[AtomicWrite])(implicit ec: ExecutionContext):Future[ISeq[Try[Unit]]] = {
-    val batch = writes.toStream.map(aw => Try(driver.serializeJournal(Atom[BSONDocument](aw, driver.useLegacySerialization))))
+  private[mongodb] override def batchAppend(writes: ISeq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext):Future[ISeq[Try[Unit]]] = {
+    val writesStream = writes.toStream
+    val globalSeqs = globalSequences(writesStream, globalFrom)
+    val batch = writesStream.zip(globalSeqs).map(x => {
+      val aw = x._1
+      val range = x._2
+      Try(driver.serializeJournal(Atom[BSONDocument](aw, range.from, range.to, driver.useLegacySerialization)))
+    })
     Future.sequence(batch.map {
       case Success(document:BSONDocument) => journal.insert(document, writeConcern).map(writeResultToUnit)
       case f:Failure[_] => Future.successful(Failure[Unit](f.exception))
     })
+  }
+
+  private[this] def globalSequences(writes: Stream[AtomicWrite], globalFrom: Long): Stream[SeqRange] = writes match {
+    case ISeq() => Stream.empty[SeqRange]
+    case _ => {
+      val sz = writes.head.size
+      SeqRange(globalFrom, sz) #:: globalSequences(writes.tail, globalFrom + sz)
+    }
   }
 
   private[mongodb] override def deleteFrom(persistenceId: String, toSequenceNr: Long)(implicit ec: ExecutionContext) = {
@@ -89,4 +103,13 @@ class RxMongoJournaller(driver: RxMongoDriver) extends MongoPersistenceJournalli
       journalRange(pid, from, to).map(_.take(maxInt).map(_.toRepr).foreach(replayCallback))
     }
 
+  private[mongodb] override def readHighestGlobalSeqNr(implicit ec: ExecutionContext): Future[Long] = {
+    journal
+      .find(BSONDocument())
+      .projection(BSONDocument(GLOBAL_TO -> 1))
+      .sort(BSONDocument(GLOBAL_TO -> -1))
+      .cursor[BSONDocument]()
+      .headOption
+      .map(d => d.flatMap(_.getAs[Long](GLOBAL_TO)).getOrElse(0L))
+  }
 }

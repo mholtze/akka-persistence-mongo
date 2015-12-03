@@ -94,6 +94,7 @@ object RxMongoSerializers {
       Event(
         pid = d.as[String](PROCESSOR_ID),
         sn = d.as[Long](SEQUENCE_NUMBER),
+        gsn = d.getAs[Long](GLOBAL_SEQUENCE_NUMBER).getOrElse(0L),
         payload = deserializePayload(d.get(PayloadKey).get,d.as[String](TYPE),d.getAs[String](HINT),d.getAs[String](SER_MANIFEST)),
         sender = d.getAs[Array[Byte]](SenderKey).flatMap(serialization.deserialize(_, classOf[ActorRef]).toOption),
         manifest = d.getAs[String](MANIFEST),
@@ -122,13 +123,14 @@ object RxMongoSerializers {
         case Some(b: BSONDocument) =>
           Event(pid = persistenceId,
                 sn = sequenceNr,
+                gsn = 0L,
                 payload = Bson(b.as[BSONDocument](PayloadKey)),
                 sender = b.getAs[Array[Byte]](SenderKey).flatMap(serialization.deserialize(_, classOf[ActorRef]).toOption),
                 manifest = None)
         case Some(ser: BSONBinary) =>
           val repr = serialization.deserialize(ser.byteArray, classOf[PersistentRepr])
             .getOrElse(throw new IllegalStateException(s"Unable to deserialize PersistentRepr for id $persistenceId and sequence number $sequenceNr"))
-          Event[BSONDocument](useLegacySerialization = false)(repr).copy(pid = persistenceId, sn = sequenceNr)
+          Event[BSONDocument](useLegacySerialization = false)(repr, 0L).copy(pid = persistenceId, sn = sequenceNr)
         case Some(x) =>
           throw new IllegalStateException(s"Unexpected value $x for $SERIALIZED field in document for id $persistenceId and sequence number $sequenceNr")
         case None =>
@@ -144,6 +146,8 @@ object RxMongoSerializers {
         PROCESSOR_ID -> atom.pid,
         FROM -> atom.from,
         TO -> atom.to,
+        GLOBAL_FROM -> atom.globalFrom,
+        GLOBAL_TO -> atom.globalTo,
         EVENTS -> BSONArray(atom.events.map(serializeEvent)),
         VERSION -> 1
       )
@@ -152,7 +156,7 @@ object RxMongoSerializers {
     import Producer._
     private def serializeEvent(event: Event)(implicit serialization: Serialization, system: ActorSystem): BSONDocument = {
       val doc = serializePayload(event.payload)(
-        BSONDocument(VERSION -> 1, PROCESSOR_ID -> event.pid, SEQUENCE_NUMBER -> event.sn))
+        BSONDocument(VERSION -> 1, PROCESSOR_ID -> event.pid, SEQUENCE_NUMBER -> event.sn, GLOBAL_SEQUENCE_NUMBER -> event.gsn))
       (for {
         d <- Option(doc)
         d <- event.manifest.map(m => d.add(MANIFEST -> m)).orElse(Option(d))

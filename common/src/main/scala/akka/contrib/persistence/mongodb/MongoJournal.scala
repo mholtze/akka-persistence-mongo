@@ -22,6 +22,22 @@ class MongoJournal(config: Config) extends AsyncWriteJournal {
   private[this] val impl = MongoPersistenceExtension(context.system)(config).journaler
   private[this] implicit val ec = context.dispatcher
 
+  private[this] var lastGlobalSequenceNr: Long = 0L // fixme load value
+
+  /**
+    * Allocate a block of global sequence numbers to cover the range of messages in the batch and return the
+    * first number in the sequence.
+    *
+    * This method must execute inside the AsyncWriteJournal Actor's receive handler.
+    */
+  private[this] def nextGlobalSequenceFrom(messages: immutable.Seq[AtomicWrite]): Long = {
+    val globalFrom = lastGlobalSequenceNr + 1
+    val eventCount = messages.foldLeft(0L)((t, aw) => t + aw.size)
+
+    lastGlobalSequenceNr += eventCount
+    globalFrom
+  }
+
   /**
    * Plugin API: asynchronously writes a batch (`Seq`) of persistent messages to the
    * journal.
@@ -66,7 +82,7 @@ class MongoJournal(config: Config) extends AsyncWriteJournal {
    * caching some result `Seq` for the happy path, i.e. when no messages are rejected.
    */
   override def asyncWriteMessages(messages: immutable.Seq[AtomicWrite]): Future[immutable.Seq[Try[Unit]]] =
-    impl.batchAppend(messages)
+    impl.batchAppend(messages, nextGlobalSequenceFrom(messages))
 
   /**
    * Plugin API: asynchronously deletes all persistent messages up to `toSequenceNr`
@@ -143,17 +159,23 @@ trait JournallingFieldNames {
   final val TYPE = "_t"
   final val HINT = "_h"
   final val SER_MANIFEST = "_sm"
+
+  final val GLOBAL_SEQUENCE_NUMBER = "gsn"
+  final val GLOBAL_FROM = "gfrom"
+  final val GLOBAL_TO = "gto"
 }
 object JournallingFieldNames extends JournallingFieldNames
 
 trait MongoPersistenceJournallingApi {
-  private[mongodb] def batchAppend(writes: immutable.Seq[AtomicWrite])(implicit ec: ExecutionContext): Future[immutable.Seq[Try[Unit]]]
+  private[mongodb] def batchAppend(writes: immutable.Seq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext): Future[immutable.Seq[Try[Unit]]]
 
   private[mongodb] def deleteFrom(persistenceId: String, toSequenceNr: Long)(implicit ec: ExecutionContext): Future[Unit]
 
   private[mongodb] def replayJournal(pid: String, from: Long, to: Long, max: Long)(replayCallback: PersistentRepr ⇒ Unit)(implicit ec: ExecutionContext): Future[Unit]
   
   private[mongodb] def maxSequenceNr(pid: String, from: Long)(implicit ec: ExecutionContext): Future[Long]
+
+  private[mongodb] def readHighestGlobalSeqNr(implicit ec: ExecutionContext): Future[Long]
 }
 
 trait MongoPersistenceJournalFailFast extends MongoPersistenceJournallingApi {
@@ -173,8 +195,8 @@ trait MongoPersistenceJournalFailFast extends MongoPersistenceJournallingApi {
     else thunk
   }
 
-  private[mongodb] abstract override def batchAppend(writes: immutable.Seq[AtomicWrite])(implicit ec: ExecutionContext): Future[immutable.Seq[Try[Unit]]] =
-    breaker.withCircuitBreaker(super.batchAppend(writes))
+  private[mongodb] abstract override def batchAppend(writes: immutable.Seq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext): Future[immutable.Seq[Try[Unit]]] =
+    breaker.withCircuitBreaker(super.batchAppend(writes, globalFrom))
 
   private[mongodb] abstract override def deleteFrom(persistenceId: String, toSequenceNr: Long)(implicit ec: ExecutionContext): Future[Unit] =
     breaker.withCircuitBreaker(super.deleteFrom(persistenceId, toSequenceNr))
@@ -212,9 +234,9 @@ trait MongoPersistenceJournalMetrics extends MongoPersistenceJournallingApi with
     result
   }
   
-  private[mongodb] abstract override def batchAppend(writes: immutable.Seq[AtomicWrite])(implicit ec: ExecutionContext): Future[immutable.Seq[Try[Unit]]] = timeIt (appendTimer) {
+  private[mongodb] abstract override def batchAppend(writes: immutable.Seq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext): Future[immutable.Seq[Try[Unit]]] = timeIt (appendTimer) {
     writeBatchSize += writes.map(_.size).sum
-    super.batchAppend(writes)
+    super.batchAppend(writes, globalFrom)
   }
 
   private[mongodb] abstract override def deleteFrom(persistenceId: String, toSequenceNr: Long)(implicit ec: ExecutionContext): Future[Unit] = timeIt (deleteTimer) {

@@ -32,7 +32,7 @@ class RxMongoJournallerSpec extends TestKit(ActorSystem("unit-test")) with RxMon
 
   "A reactive mongo journal implementation" should "insert journal records" in { new Fixture { withJournal { journal =>
     val inserted = for {
-      inserted <- underTest.batchAppend(ISeq(AtomicWrite(records)))
+      inserted <- underTest.batchAppend(ISeq(AtomicWrite(records)), 101L)
       range <- journal.find(BSONDocument()).cursor[BSONDocument]().collect[List]()
       head <- journal.find(BSONDocument()).cursor().headOption
     } yield (range, head)
@@ -49,13 +49,14 @@ class RxMongoJournallerSpec extends TestKit(ActorSystem("unit-test")) with RxMon
     }).head
     recone.getAs[String](PROCESSOR_ID) shouldBe Some("unit-test")
     recone.getAs[Long](SEQUENCE_NUMBER) shouldBe Some(1)
+    recone.getAs[Long](GLOBAL_SEQUENCE_NUMBER) shouldBe Some(101)
 
   } }
   () }
 
   it should "insert records with documents as payload" in { new Fixture { withJournal { journal =>
     val inserted = for {
-      inserted <- underTest.batchAppend(ISeq(AtomicWrite(documents)))
+      inserted <- underTest.batchAppend(ISeq(AtomicWrite(documents)), 101L)
       range <- journal.find(BSONDocument()).cursor[BSONDocument]().collect[List]()
       head <- journal.find(BSONDocument()).cursor().headOption
     } yield (range,head)
@@ -67,6 +68,7 @@ class RxMongoJournallerSpec extends TestKit(ActorSystem("unit-test")) with RxMon
     }).head
     recone.getAs[String](PROCESSOR_ID) shouldBe Some("unit-test")
     recone.getAs[Long](SEQUENCE_NUMBER) shouldBe Some(10)
+    recone.getAs[Long](GLOBAL_SEQUENCE_NUMBER) shouldBe Some(101)
     recone.getAs[String](TYPE) shouldBe Some("bson")
     recone.getAs[BSONDocument](PayloadKey) shouldBe Some(BSONDocument("foo" -> "bar", "baz" -> 1))
     ()

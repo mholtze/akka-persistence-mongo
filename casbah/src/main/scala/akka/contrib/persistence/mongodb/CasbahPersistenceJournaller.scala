@@ -30,8 +30,14 @@ class CasbahPersistenceJournaller(driver: CasbahMongoDriver) extends MongoPersis
            .map(driver.deserializeJournal)
 
   import collection.immutable.{Seq => ISeq}
-  private[mongodb] override def batchAppend(writes: ISeq[AtomicWrite])(implicit ec: ExecutionContext):Future[ISeq[Try[Unit]]] = Future {
-    val batch = writes.map(write => Try(driver.serializeJournal(Atom[DBObject](write, driver.useLegacySerialization))))
+  private[mongodb] override def batchAppend(writes: ISeq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext):Future[ISeq[Try[Unit]]] = Future {
+    val globalSeqs = globalSequences(writes, globalFrom)
+    val batch = writes.zip(globalSeqs).map(x => {
+      val aw = x._1
+      val range = x._2
+      Try(driver.serializeJournal(Atom[DBObject](aw, range.from, range.to, driver.useLegacySerialization)))
+    })
+
     if (batch.forall(_.isSuccess)) {
       val bulk = journal.initializeOrderedBulkOperation
       batch.collect { case scala.util.Success(ser) => ser } foreach bulk.insert
@@ -40,6 +46,13 @@ class CasbahPersistenceJournaller(driver: CasbahMongoDriver) extends MongoPersis
     } else { // degraded performance, cant batch
       batch.map(_.map(serialized => journal.insert(serialized)(identity, writeConcern)).map(_ => ()))
     }
+  }
+
+  def globalSequences(writes: Seq[AtomicWrite], globalFrom: Long): Seq[SeqRange] = {
+    writes.view.drop(1).foldLeft(Vector(SeqRange(globalFrom, writes.head.size)))((result, aw) => {
+      val last = result.last
+      result :+ SeqRange(last.from + last.size, aw.size)
+    })
   }
 
   private[mongodb] override def deleteFrom(persistenceId: String, toSequenceNr: Long)(implicit ec: ExecutionContext): Future[Unit] = Future {
@@ -77,4 +90,11 @@ class CasbahPersistenceJournaller(driver: CasbahMongoDriver) extends MongoPersis
     }
   }
 
+  private[mongodb] override def readHighestGlobalSeqNr(implicit ec: ExecutionContext): Future[Long] = Future {
+    val query = MongoDBObject()
+    val projection = MongoDBObject(GLOBAL_TO -> 1)
+    val sort = MongoDBObject(GLOBAL_TO -> -1)
+    val max = journal.find(query, projection).sort(sort).limit(1).one()
+    max.getAs[Long](GLOBAL_TO).getOrElse(0L)
+  }
 }
