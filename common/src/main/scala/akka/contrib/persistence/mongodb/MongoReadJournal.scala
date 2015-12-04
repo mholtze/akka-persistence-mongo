@@ -37,6 +37,10 @@ class ScalaDslMongoReadJournal(impl: MongoPersistenceReadJournallingApi) extends
     Source.actorPublisher[EventEnvelope](impl.eventsByPersistenceId(persistenceId,fromSequenceNr,toSequenceNr))
       .mapMaterializedValue(_ => ())
   }
+
+  def allEventsInGlobalOrder(globalFrom: Long, globalTo: Long): Source[GlobalEventEnvelope, Unit] =
+    Source.actorPublisher[GlobalEventEnvelope](impl.allEventsInGlobalOrder(globalFrom, globalTo))
+      .mapMaterializedValue(_ => ())
 }
 
 class JavaDslMongoReadJournal(rj: ScalaDslMongoReadJournal) extends javadsl.ReadJournal with JCP with JCEBP {
@@ -48,12 +52,16 @@ class JavaDslMongoReadJournal(rj: ScalaDslMongoReadJournal) extends javadsl.Read
     require(persistenceId != null, "PersistenceId must not be null")
     rj.currentEventsByPersistenceId(persistenceId, fromSequenceNr, toSequenceNr).asJava
   }
+
+  def allEventsInGlobalOrder(globalFrom: Long, globalTo: Long): JSource[GlobalEventEnvelope, Unit] =
+    rj.allEventsInGlobalOrder(globalFrom, globalTo).asJava
 }
 
 trait MongoPersistenceReadJournallingApi {
   def allPersistenceIds: Props
   def allEvents: Props
   def eventsByPersistenceId(persistenceId: String, fromSeq: Long, toSeq: Long): Props
+  def allEventsInGlobalOrder(globalFrom: Long, globalTo: Long): Props
 }
 
 trait SyncActorPublisher[A,Cursor] extends ActorPublisher[A] {

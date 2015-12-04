@@ -143,4 +143,52 @@ abstract class ReadJournalSpec[A <: MongoPersistenceExtension](extensionClass: C
 
     Await.result(fut,10.seconds).map(_.s) shouldBe Set("just","a","test","END")
   }
+
+  it should "support the globally ordered journal dump query" in withConfig(config(extensionClass), "akka-contrib-mongodb-persistence-readjournal") { case (as,_) =>
+    import concurrent.duration._
+    implicit val system = as
+    implicit val mat = ActorMaterializer()
+
+    val events = ("this" :: "is" :: "just" :: "a" :: "test" :: "END" :: Nil) map Append.apply
+
+    val promise = Promise[Unit]()
+    val ar = as.actorOf(props("foo",promise))
+
+    events foreach (ar ! _)
+
+    Await.result(promise.future, 10.seconds)
+
+    val readJournal =
+      PersistenceQuery(as).readJournalFor[ScalaDslMongoReadJournal](MongoReadJournal.Identifier)
+
+    val fut = readJournal.allEventsInGlobalOrder(0, Long.MaxValue).runFold(Seq.empty[GlobalEventEnvelope]){ (received, ee) =>
+      println(s"ee = $ee")
+      received :+ ee
+    }
+    Await.result(fut,10.seconds).map(_.event) shouldBe ("this" :: "is" :: "just" :: "a" :: "test" :: "END" :: Nil)
+  }
+
+  it should "support the globally ordered journal dump query with range restrictions" in withConfig(config(extensionClass), "akka-contrib-mongodb-persistence-readjournal") { case (as,_) =>
+    import concurrent.duration._
+    implicit val system = as
+    implicit val mat = ActorMaterializer()
+
+    val events = ("this" :: "is" :: "just" :: "a" :: "test" :: "END" :: Nil) map Append.apply
+
+    val promise = Promise[Unit]()
+    val ar = as.actorOf(props("foo",promise))
+
+    events foreach (ar ! _)
+
+    Await.result(promise.future, 10.seconds)
+
+    val readJournal =
+      PersistenceQuery(as).readJournalFor[ScalaDslMongoReadJournal](MongoReadJournal.Identifier)
+
+    val fut = readJournal.allEventsInGlobalOrder(2L, 4L).runFold(Seq.empty[GlobalEventEnvelope]){ (received, ee) =>
+      println(s"ee = $ee")
+      received :+ ee
+    }
+    Await.result(fut,10.seconds).map(_.event) shouldBe ("is" :: "just" :: "a" :: Nil)
+  }
 }

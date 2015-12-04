@@ -150,4 +150,47 @@ class RxMongoReadJournaller(driver: RxMongoDriver) extends MongoPersistenceReadJ
 
   override def eventsByPersistenceId(persistenceId: String, fromSeq: Long, toSeq: Long): Props =
     EventsByPersistenceId.props(driver,persistenceId,fromSeq,toSeq)
+
+  override def allEventsInGlobalOrder(globalFrom: Long, globalTo: Long): Props =
+    AllEventsInGlobalOrder.props(driver, globalFrom, globalTo)
+}
+
+object AllEventsInGlobalOrder {
+  def props(driver: RxMongoDriver, globalFrom: Long, globalTo: Long) = Props(new AllEventsInGlobalOrder(driver, globalFrom, globalTo))
+}
+
+class AllEventsInGlobalOrder(val driver: RxMongoDriver, globalFrom: Long, globalTo: Long) extends IterateeActorPublisher[GlobalEventEnvelope] {
+  import RxMongoSerializers._
+  import JournallingFieldNames._
+  import context.dispatcher
+
+  private val opts = QueryOpts().noCursorTimeout
+
+  private val flatten: Enumeratee[BSONDocument,GlobalEventEnvelope] = Enumeratee.mapFlatten[BSONDocument] { doc =>
+    Enumerator(
+      doc.as[BSONArray](EVENTS).values.collect {
+        case d:BSONDocument => driver.deserializeJournal(d)
+      }.zipWithIndex.map{case (ev,idx) => ev.toGlobalEnvelope(idx.toLong)} : _*
+    )
+  }
+
+  private val filter = Enumeratee.filter[GlobalEventEnvelope] { e =>
+    e.globalSequenceNr >= globalFrom && e.globalSequenceNr <= globalTo
+  }
+
+  override def initial: Enumerator[GlobalEventEnvelope] = {
+    val q = BSONDocument(
+      GLOBAL_FROM -> BSONDocument("$gte" -> globalFrom),
+      GLOBAL_FROM -> BSONDocument("$lte" -> globalTo)
+    )
+    driver.journal
+      .find(q)
+      .options(opts)
+      .sort(BSONDocument(GLOBAL_FROM -> 1))
+      .projection(BSONDocument(EVENTS -> 1))
+      .cursor[BSONDocument]()
+      .enumerate()
+      .through(flatten)
+      .through(filter)
+  }
 }

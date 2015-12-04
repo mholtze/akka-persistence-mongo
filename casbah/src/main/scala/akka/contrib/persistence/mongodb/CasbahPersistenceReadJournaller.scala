@@ -95,4 +95,36 @@ class CasbahPersistenceReadJournaller(driver: CasbahMongoDriver) extends MongoPe
 
   override def eventsByPersistenceId(persistenceId: String, fromSeq: Long, toSeq: Long): Props =
     EventsByPersistenceId.props(driver,persistenceId,fromSeq,toSeq)
+
+  override def allEventsInGlobalOrder(globalFrom: Long, globalTo: Long): Props =
+    AllEventsInGlobalOrder.props(driver, globalFrom, globalTo)
+}
+
+object AllEventsInGlobalOrder {
+  def props(driver: CasbahMongoDriver, globalFrom: Long, globalTo: Long): Props = Props(new AllEventsInGlobalOrder(driver, globalFrom, globalTo))
+}
+
+class AllEventsInGlobalOrder(val driver: CasbahMongoDriver, globalFrom: Long, globalTo: Long) extends SyncActorPublisher[GlobalEventEnvelope, Stream[GlobalEventEnvelope]] {
+  import CasbahSerializers._
+
+  override protected def initialCursor: Stream[GlobalEventEnvelope] =
+    driver.journal
+      .find((FROM $gte globalFrom) ++ (FROM $lte globalTo))
+      .sort(MongoDBObject(GLOBAL_FROM -> 1))
+      .toStream
+      .flatMap(_.getAs[MongoDBList](EVENTS))
+      .flatMap(lst => lst.collect {case x:DBObject => x} )
+      .filter(dbo => dbo.getAs[Long](GLOBAL_SEQUENCE_NUMBER).exists(gsn => gsn >= globalFrom && gsn <= globalTo))
+      .map(driver.deserializeJournal)
+      .zipWithIndex
+      .map { case(e,i) => e.toGlobalEnvelope(i.toLong) }
+
+  override protected def next(c: Stream[GlobalEventEnvelope], atMost: Long): (Vector[GlobalEventEnvelope], Stream[GlobalEventEnvelope]) = {
+    val (buf,remainder) = c.splitAt(atMost.toIntWithoutWrapping)
+    (buf.toVector, remainder)
+  }
+
+  override protected def isCompleted(c: Stream[GlobalEventEnvelope]): Boolean = c.isEmpty
+
+  override protected def discard(c: Stream[GlobalEventEnvelope]): Unit = ()
 }

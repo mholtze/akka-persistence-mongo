@@ -176,6 +176,25 @@ case class Event(pid: String, sn: Long, gsn: Long, payload: Payload, sender: Opt
         event = x.content
       )
   }
+
+  def toGlobalEnvelope(offset: Long) = payload match {
+    case l:Legacy =>
+      GlobalEventEnvelope(
+        offset = offset,
+        persistenceId = pid,
+        sequenceNr = sn,
+        globalSequenceNr = gsn,
+        event = l.content.payload
+      )
+    case x =>
+      GlobalEventEnvelope(
+        offset = offset,
+        persistenceId = pid,
+        sequenceNr = sn,
+        globalSequenceNr = gsn,
+        event = x.content
+      )
+  }
 }
 
 object Event {
