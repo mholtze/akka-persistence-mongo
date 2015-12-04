@@ -40,7 +40,7 @@ class AllEvents(val driver: CasbahMongoDriver) extends SyncActorPublisher[EventE
   override protected def initialCursor: Stream[EventEnvelope] =
     driver.journal
           .find(MongoDBObject())
-          .sort(MongoDBObject(PROCESSOR_ID -> 1, SEQUENCE_NUMBER -> 1))
+          .sort(MongoDBObject(PROCESSOR_ID -> 1, FROM -> 1))
           .toStream
           .flatMap(_.getAs[MongoDBList](EVENTS))
           .flatMap(lst => lst.collect {case x:DBObject => x} )

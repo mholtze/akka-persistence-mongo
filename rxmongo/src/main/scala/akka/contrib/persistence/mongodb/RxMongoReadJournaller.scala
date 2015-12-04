@@ -75,7 +75,7 @@ class AllEvents(val driver: RxMongoDriver) extends IterateeActorPublisher[EventE
     driver.journal
       .find(BSONDocument())
       .options(opts)
-      .sort(BSONDocument(PROCESSOR_ID -> 1, SEQUENCE_NUMBER -> 1))
+      .sort(BSONDocument(PROCESSOR_ID -> 1, FROM -> 1))
       .projection(BSONDocument(EVENTS -> 1))
       .cursor[BSONDocument]()
       .enumerate()
@@ -134,6 +134,7 @@ class EventsByPersistenceId(val driver:RxMongoDriver,persistenceId:String,fromSe
       FROM -> BSONDocument("$lte" -> toSeq)
     )
     driver.journal.find(q)
+      .sort(BSONDocument(PROCESSOR_ID -> 1, FROM -> 1))
       .projection(BSONDocument(EVENTS -> 1))
       .cursor[BSONDocument]()
       .enumerate()
