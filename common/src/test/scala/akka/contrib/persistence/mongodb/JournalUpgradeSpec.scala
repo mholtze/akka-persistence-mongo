@@ -1,6 +1,7 @@
 package akka.contrib.persistence.mongodb
 
 import akka.actor.ActorSystem
+import akka.contrib.persistence.mongodb.serialization.BsonSerializationExtension
 import akka.persistence.PersistentRepr
 import akka.serialization.{SerializationExtension, Serialization}
 import com.mongodb.util.JSON
@@ -84,6 +85,7 @@ abstract class JournalUpgradeSpec[D <: MongoPersistenceDriver, X <: MongoPersist
 
   it should "upgrade an existing journal" in configured { as =>
     implicit val serialization = SerializationExtension.get(as.actorSystem)
+    implicit val bsonSerialization = BsonSerializationExtension(as.actorSystem)
     val coll = mongoClient.getDB(embedDB).getCollection("akka_persistence_journal")
 
     createLegacyIndex(coll)
@@ -119,6 +121,7 @@ abstract class JournalUpgradeSpec[D <: MongoPersistenceDriver, X <: MongoPersist
 
   it should "upgrade a more complicated journal" in configured { as =>
     implicit val serialization = SerializationExtension.get(as.actorSystem)
+    implicit val bsonSerialization = BsonSerializationExtension(as.actorSystem)
     val coll = mongoClient.getDB(embedDB).getCollection("akka_persistence_journal")
     coll.remove(new BasicDBObject())
     createLegacyIndex(coll)

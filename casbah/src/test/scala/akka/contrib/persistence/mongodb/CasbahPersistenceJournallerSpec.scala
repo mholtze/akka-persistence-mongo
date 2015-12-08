@@ -1,6 +1,7 @@
 package akka.contrib.persistence.mongodb
 
 import akka.actor.ActorSystem
+import akka.contrib.persistence.mongodb.serialization.BsonSerializationExtension
 import akka.persistence._
 import akka.serialization.SerializationExtension
 import akka.testkit.TestKit
@@ -21,6 +22,7 @@ class CasbahPersistenceJournallerSpec extends TestKit(ActorSystem("unit-test")) 
   import JournallingFieldNames._
 
   implicit val serialization = SerializationExtension(system)
+  implicit val bsonSerialization = BsonSerializationExtension(system)
 
   implicit class PimpedDBObject(dbo: DBObject) {
     def firstEvent = dbo.as[MongoDBList](EVENTS).as[DBObject](0)

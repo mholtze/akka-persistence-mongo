@@ -16,6 +16,7 @@ class RxMongoJournaller(driver: RxMongoDriver) extends MongoPersistenceJournalli
   import JournallingFieldNames._
 
   private[this] implicit val serialization = driver.serialization
+  private[this] implicit val bsonSerialization = driver.bsonSerialization
   private[this] lazy val writeConcern = driver.journalWriteConcern
 
   private[this] def journal(implicit ec: ExecutionContext) = driver.journal

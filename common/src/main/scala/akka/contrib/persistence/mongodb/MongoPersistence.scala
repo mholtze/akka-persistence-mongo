@@ -3,6 +3,7 @@ package akka.contrib.persistence.mongodb
 import akka.actor.ActorSystem
 import akka.contrib.persistence.mongodb.JournallingFieldNames._
 import akka.contrib.persistence.mongodb.SnapshottingFieldNames._
+import akka.contrib.persistence.mongodb.serialization.{BsonSerializationExtension, BsonSerialization}
 import akka.pattern.CircuitBreaker
 import akka.serialization.{Serialization, SerializationExtension}
 import com.codahale.metrics.SharedMetricRegistries
@@ -33,11 +34,11 @@ object MongoPersistenceDriver {
 }
 
 trait CanSerializeJournal[D] {
-  def serializeAtom(atom: Atom)(implicit serialization: Serialization, system: ActorSystem): D
+  def serializeAtom(atom: Atom)(implicit serialization: Serialization, bsonSer: BsonSerialization, system: ActorSystem): D
 }
 
 trait CanDeserializeJournal[D] {
-  def deserializeDocument(document: D)(implicit serialization: Serialization, system: ActorSystem): Event
+  def deserializeDocument(document: D)(implicit serialization: Serialization, bsonSer: BsonSerialization, system: ActorSystem): Event
 }
 
 trait JournalFormats[D] extends CanSerializeJournal[D] with CanDeserializeJournal[D]
@@ -70,6 +71,7 @@ abstract class MongoPersistenceDriver(as: ActorSystem, config: Config) {
   }
 
   implicit lazy val serialization = SerializationExtension(actorSystem)
+  implicit lazy val bsonSerialization = BsonSerializationExtension(actorSystem)
   lazy val breaker = CircuitBreaker(actorSystem.scheduler, settings.Tries, settings.CallTimeout, settings.ResetTimeout)
 
   as.registerOnTermination {

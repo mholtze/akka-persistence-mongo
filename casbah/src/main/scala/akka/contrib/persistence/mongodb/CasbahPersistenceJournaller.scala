@@ -15,6 +15,7 @@ class CasbahPersistenceJournaller(driver: CasbahMongoDriver) extends MongoPersis
   implicit val system = driver.actorSystem
 
   private[this] implicit val serialization = driver.serialization
+  private[this] implicit val bsonSerialization = driver.bsonSerialization
   private[this] lazy val writeConcern = driver.journalWriteConcern
 
   private[this] def journalRangeQuery(pid: String, from: Long, to: Long): DBObject =

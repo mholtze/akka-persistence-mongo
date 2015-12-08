@@ -12,6 +12,7 @@ class RxMongoSnapshotter(driver: RxMongoDriver) extends MongoPersistenceSnapshot
   import RxMongoSerializers._
 
   private[this] implicit val serialization = driver.serialization
+  private[this] implicit val bsonSerialization = driver.bsonSerialization
   private[this] lazy val writeConcern = driver.snapsWriteConcern
   private[this] implicit lazy val snapshotSerialization = new RxMongoSnapshotSerialization()
 

@@ -1,6 +1,7 @@
 package akka.contrib.persistence.mongodb
 
 import akka.actor.{ActorRef, ActorSystem}
+import akka.contrib.persistence.mongodb.serialization.BsonSerialization
 import akka.persistence.PersistentRepr
 import akka.serialization.Serialization
 import com.mongodb.DBObject
@@ -18,13 +19,13 @@ object CasbahSerializers extends JournallingFieldNames {
 
   implicit object Deserializer extends CanDeserializeJournal[DBObject] {
 
-    override def deserializeDocument(dbo: DBObject)(implicit serialization: Serialization, system: ActorSystem): Event = dbo match {
+    override def deserializeDocument(dbo: DBObject)(implicit serialization: Serialization, bsonSer: BsonSerialization, system: ActorSystem): Event = dbo match {
       case Version(1,d) => deserializeVersionOne(d)
       case Version(0,d) => deserializeDocumentLegacy(d)
       case Version(x,_) => throw new IllegalStateException(s"Don't know how to deserialize version $x of document")
     }
 
-    private def deserializeVersionOne(d: DBObject)(implicit serialization: Serialization, system: ActorSystem) = Event(
+    private def deserializeVersionOne(d: DBObject)(implicit serialization: Serialization, bsonSer: BsonSerialization, system: ActorSystem) = Event(
       pid = d.as[String](PROCESSOR_ID),
       sn = d.as[Long](SEQUENCE_NUMBER),
       gsn = d.getAs[Long](GLOBAL_SEQUENCE_NUMBER).getOrElse(0L),
@@ -34,7 +35,7 @@ object CasbahSerializers extends JournallingFieldNames {
       writerUuid = d.getAs[String](WRITER_UUID)
     )
 
-    private def deserializeDocumentLegacy(d: DBObject)(implicit serialization: Serialization, system: ActorSystem) = {
+    private def deserializeDocumentLegacy(d: DBObject)(implicit serialization: Serialization, bsonSer: BsonSerialization, system: ActorSystem) = {
       val persistenceId = d.as[String](PROCESSOR_ID)
       val sequenceNr = d.as[Long](SEQUENCE_NUMBER)
       d.get(SERIALIZED) match {
@@ -59,7 +60,7 @@ object CasbahSerializers extends JournallingFieldNames {
   }
 
   implicit object Serializer extends CanSerializeJournal[DBObject] {
-    override def serializeAtom(atom: Atom)(implicit serialization: Serialization, system: ActorSystem): DBObject = {
+    override def serializeAtom(atom: Atom)(implicit serialization: Serialization, bsonSer: BsonSerialization, system: ActorSystem): DBObject = {
       MongoDBObject(
         PROCESSOR_ID -> atom.pid,
         FROM -> atom.from,
@@ -71,7 +72,7 @@ object CasbahSerializers extends JournallingFieldNames {
       )
     }
 
-    private def serializeEvent(event: Event)(implicit serialization: Serialization, system: ActorSystem): DBObject = {
+    private def serializeEvent(event: Event)(implicit serialization: Serialization, bsonSer: BsonSerialization, system: ActorSystem): DBObject = {
       val b = serializePayload(event.payload)(MongoDBObject.newBuilder ++= (
           VERSION -> 1 ::
             PROCESSOR_ID -> event.pid ::
@@ -96,6 +97,7 @@ object CasbahSerializers extends JournallingFieldNames {
         case Bson(doc: DBObject) => builder += PayloadKey -> doc
         case Bin(bytes) => builder += PayloadKey -> bytes
         case Legacy(bytes) => builder += PayloadKey -> bytes
+        case b: BsonSerialized[_, DBObject] => builder ++= (PayloadKey -> b.document :: HINT -> b.clazz.getName :: SER_MANIFEST -> b.serializedManifest :: Nil)
         case s: Serialized[_] => builder ++= (PayloadKey -> s.bytes :: HINT -> s.clazz.getName :: SER_MANIFEST -> s.serializedManifest :: Nil)
         case StringPayload(str) => builder += PayloadKey -> str
         case FloatingPointPayload(d) => builder += PayloadKey -> d

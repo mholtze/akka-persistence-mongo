@@ -2,6 +2,7 @@ package akka.contrib.persistence.mongodb
 
 import akka.actor.ActorSystem
 import akka.contrib.persistence.mongodb.RxMongoSerializers.RxMongoSnapshotSerialization
+import akka.contrib.persistence.mongodb.serialization.BsonSerializationExtension
 import akka.persistence.{SnapshotMetadata, SelectedSnapshot}
 import akka.serialization.SerializationExtension
 import akka.testkit.TestKit
@@ -16,6 +17,7 @@ import duration._
 class RxMongoSnapshotterSpec extends TestKit(ActorSystem("unit-test")) with RxMongoPersistenceSpec {
 
   implicit val serialization = SerializationExtension.get(system)
+  implicit val bsonSerialization = BsonSerializationExtension(system)
   implicit val serializer = new RxMongoSnapshotSerialization()
 
   "A rxmongo snapshotter" should "support legacy snapshots" in { withSnapshot { ss =>

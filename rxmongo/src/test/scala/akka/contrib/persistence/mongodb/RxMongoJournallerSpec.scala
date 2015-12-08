@@ -1,6 +1,7 @@
 package akka.contrib.persistence.mongodb
 
 import akka.actor.ActorSystem
+import akka.contrib.persistence.mongodb.serialization.BsonSerializationExtension
 import akka.persistence.{AtomicWrite, PersistentRepr}
 import akka.serialization.SerializationExtension
 import akka.testkit.TestKit
@@ -15,6 +16,7 @@ class RxMongoJournallerSpec extends TestKit(ActorSystem("unit-test")) with RxMon
   import JournallingFieldNames._
 
   implicit val serialization = SerializationExtension(system)
+  implicit val bsonSerialization = BsonSerializationExtension(system)
 
   def await[T](block: Future[T])(implicit ec: ExecutionContext) = {
     Await.result(block,3.seconds)

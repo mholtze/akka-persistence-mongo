@@ -1,6 +1,7 @@
 package akka.contrib.persistence.mongodb
 
 import akka.actor.ActorSystem
+import akka.contrib.persistence.mongodb.serialization.BsonSerializationExtension
 import akka.persistence.{SelectedSnapshot, SnapshotMetadata}
 import akka.serialization.SerializationExtension
 import akka.testkit.TestKit
@@ -15,6 +16,7 @@ class CasbahPersistenceSnapshotterSpec extends TestKit(ActorSystem("unit-test"))
   import akka.contrib.persistence.mongodb.SnapshottingFieldNames._
 
   implicit val serialization = SerializationExtension(system)
+  implicit val bsonSerialization = BsonSerializationExtension(system)
 
   trait Fixture {
     val underTest = new CasbahPersistenceSnapshotter(driver)

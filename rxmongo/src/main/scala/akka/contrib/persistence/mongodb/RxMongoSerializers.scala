@@ -2,6 +2,7 @@ package akka.contrib.persistence.mongodb
 
 import akka.actor.{ActorSystem, ActorRef}
 import akka.contrib.persistence.mongodb.JournallingFieldNames._
+import akka.contrib.persistence.mongodb.serialization.BsonSerialization
 import akka.persistence.serialization.Snapshot
 import akka.persistence.{SnapshotMetadata, SelectedSnapshot, PersistentRepr}
 import akka.serialization.Serialization
@@ -30,7 +31,7 @@ object RxMongoSerializers {
     }
   }
 
-  class RxMongoSnapshotSerialization(implicit serialization: Serialization) extends BSONDocumentReader[SelectedSnapshot] with BSONDocumentWriter[SelectedSnapshot] {
+  class RxMongoSnapshotSerialization(implicit serialization: Serialization, bsonSer: BsonSerialization) extends BSONDocumentReader[SelectedSnapshot] with BSONDocumentWriter[SelectedSnapshot] {
 
     import SnapshottingFieldNames._
 
@@ -83,14 +84,14 @@ object RxMongoSerializers {
 
   implicit object JournalDeserializer extends CanDeserializeJournal[BSONDocument] {
 
-    override def deserializeDocument(document: BSONDocument)(implicit serialization: Serialization, system: ActorSystem): Event = document match {
+    override def deserializeDocument(document: BSONDocument)(implicit serialization: Serialization, bsonSer: BsonSerialization, system: ActorSystem): Event = document match {
       case Version(1,doc) => deserializeVersionOne(doc)
       case Version(0,doc) => deserializeDocumentLegacy(doc)
       case Version(x,_) => throw new IllegalStateException(s"Don't know how to deserialize version $x of document")
       case _ => throw new IllegalStateException("Failed to read or default version field")
     }
 
-    private def deserializeVersionOne(d: BSONDocument)(implicit serialization: Serialization, system: ActorSystem): Event =
+    private def deserializeVersionOne(d: BSONDocument)(implicit serialization: Serialization, bsonSer: BsonSerialization, system: ActorSystem): Event =
       Event(
         pid = d.as[String](PROCESSOR_ID),
         sn = d.as[Long](SEQUENCE_NUMBER),
@@ -101,10 +102,13 @@ object RxMongoSerializers {
         writerUuid = d.getAs[String](WRITER_UUID)
       )
 
-    private def deserializePayload(b: BSONValue, clue: String, clazzName: Option[String], serializedManifest: Option[String])(implicit serialization: Serialization): Payload = (clue,b) match {
+    private def deserializePayload(b: BSONValue, clue: String, clazzName: Option[String], serializedManifest: Option[String])(implicit serialization: Serialization, bsonSer: BsonSerialization): Payload = (clue,b) match {
       case ("ser",BSONBinary(bfr, _)) if clazzName.isDefined =>
         val clazz = Class.forName(clazzName.get).asInstanceOf[Class[X forSome {type X <: AnyRef}]]
         Serialized(bfr.readArray(bfr.size), clazz, serializedManifest)
+      case ("bser",d:BSONDocument) if clazzName.isDefined =>
+        val clazz = Class.forName(clazzName.get).asInstanceOf[Class[X forSome {type X <: AnyRef}]]
+        BsonSerialized(d, clazz, serializedManifest)
       case ("bson",d:BSONDocument) => Bson(d)
       case ("bin",BSONBinary(bfr, _)) => Bin(bfr.readArray(bfr.size))
       case ("repr",BSONBinary(bfr, _)) => Legacy(bfr.readArray(bfr.size))
@@ -116,7 +120,7 @@ object RxMongoSerializers {
     }
 
 
-    private def deserializeDocumentLegacy(document: BSONDocument)(implicit serialization: Serialization, system: ActorSystem): Event = {
+    private def deserializeDocumentLegacy(document: BSONDocument)(implicit serialization: Serialization, bsonSer: BsonSerialization, system: ActorSystem): Event = {
       val persistenceId = document.as[String](PROCESSOR_ID)
       val sequenceNr = document.as[Long](SEQUENCE_NUMBER)
       document.get(SERIALIZED) match {
@@ -141,7 +145,7 @@ object RxMongoSerializers {
 
   implicit object JournalSerializer extends CanSerializeJournal[BSONDocument] {
 
-    override def serializeAtom(atom: Atom)(implicit serialization: Serialization, system: ActorSystem): BSONDocument = {
+    override def serializeAtom(atom: Atom)(implicit serialization: Serialization, bsonSer: BsonSerialization, system: ActorSystem): BSONDocument = {
       BSONDocument(
         PROCESSOR_ID -> atom.pid,
         FROM -> atom.from,
@@ -154,7 +158,7 @@ object RxMongoSerializers {
     }
 
     import Producer._
-    private def serializeEvent(event: Event)(implicit serialization: Serialization, system: ActorSystem): BSONDocument = {
+    private def serializeEvent(event: Event)(implicit serialization: Serialization, bsonSer: BsonSerialization, system: ActorSystem): BSONDocument = {
       val doc = serializePayload(event.payload)(
         BSONDocument(VERSION -> 1, PROCESSOR_ID -> event.pid, SEQUENCE_NUMBER -> event.sn, GLOBAL_SEQUENCE_NUMBER -> event.gsn))
       (for {
@@ -174,6 +178,10 @@ object RxMongoSerializers {
         case Bson(doc: BSONDocument) => BSONDocument(PayloadKey -> doc)
         case Bin(bytes) => BSONDocument(PayloadKey -> bytes)
         case Legacy(bytes) => BSONDocument(PayloadKey -> bytes)
+        case b: BsonSerialized[_, BSONDocument] =>
+          BSONDocument(PayloadKey -> b.document,
+                       HINT -> b.clazz.getName,
+                       SER_MANIFEST -> b.serializedManifest)
         case s: Serialized[_] =>
           BSONDocument(PayloadKey -> BSON.write(s.bytes),
                        HINT -> s.clazz.getName,

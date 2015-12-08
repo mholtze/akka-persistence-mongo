@@ -1,5 +1,6 @@
 package akka.contrib.persistence.mongodb
 
+import akka.contrib.persistence.mongodb.serialization.BsonSerialization
 import akka.persistence.serialization.Snapshot
 import akka.persistence.{SelectedSnapshot, SnapshotMetadata}
 import akka.serialization.Serialization
@@ -13,7 +14,7 @@ object CasbahPersistenceSnapshotter {
 
   import SnapshottingFieldNames._
 
-  implicit def serializeSnapshot(snapshot: SelectedSnapshot)(implicit serialization: Serialization): DBObject = {
+  implicit def serializeSnapshot(snapshot: SelectedSnapshot)(implicit serialization: Serialization, bsonSer: BsonSerialization): DBObject = {
     val obj = MongoDBObject(PROCESSOR_ID -> snapshot.metadata.persistenceId,
       SEQUENCE_NUMBER -> snapshot.metadata.sequenceNr,
       TIMESTAMP -> snapshot.metadata.timestamp)
@@ -26,7 +27,7 @@ object CasbahPersistenceSnapshotter {
     obj
   }
 
-  implicit def deserializeSnapshot(document: DBObject)(implicit serialization: Serialization): SelectedSnapshot = {
+  implicit def deserializeSnapshot(document: DBObject)(implicit serialization: Serialization, bsonSer: BsonSerialization): SelectedSnapshot = {
     if (document.containsField(V1.SERIALIZED)) {
       val content = document.as[Array[Byte]](V1.SERIALIZED)
       serialization.deserialize(content, classOf[SelectedSnapshot]).get
@@ -63,6 +64,7 @@ class CasbahPersistenceSnapshotter(driver: CasbahMongoDriver) extends MongoPersi
   import SnapshottingFieldNames._
 
   private[this] implicit val serialization = driver.serialization
+  private[this] implicit val bsonSerialization = driver.bsonSerialization
   private[this] lazy val writeConcern = driver.snapsWriteConcern
 
   private[this] def snaps(implicit ec: ExecutionContext) = driver.snaps
