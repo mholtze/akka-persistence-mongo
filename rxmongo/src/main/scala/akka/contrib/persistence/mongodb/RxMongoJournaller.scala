@@ -40,23 +40,40 @@ class RxMongoJournaller(driver: RxMongoDriver) extends MongoPersistenceJournalli
     enum.run(Iteratee.getChunks[Event])
   }
 
-  private[this] def writeResultToUnit(wr: WriteResult): Try[Unit] = {
-    if (wr.ok) Success(())
+  private[this] case class PreparedWrite(atomic: AtomicWrite, document: Try[BSONDocument])
+
+  private[this] def globalEnvelopesFromWrite(pw: PreparedWrite): Seq[GlobalEventEnvelope] = {
+    val events = pw.document.get.getAs[BSONArray]("events").get.values
+    pw.atomic.payload.zip(events).map {
+      case (repr, event: BSONDocument) =>
+        GlobalEventEnvelope(
+          // offset is not very useful in this context, so just set to 0
+          offset = 0L,
+          persistenceId = repr.persistenceId,
+          sequenceNr = repr.sequenceNr,
+          globalSequenceNr = event.getAs[Long](GLOBAL_SEQUENCE_NUMBER).getOrElse(0L),
+          event = repr.payload
+        )
+    }
+  }
+
+  private[this] def writeResultToGlobalEnvelope(pw: PreparedWrite, wr: WriteResult): Try[Seq[GlobalEventEnvelope]] = {
+    if (wr.ok) Success(globalEnvelopesFromWrite(pw))
     else throw wr
   }
 
-  private[mongodb] override def batchAppend(writes: ISeq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext):Future[ISeq[Try[Unit]]] = {
+  private[mongodb] override def batchAppend(writes: ISeq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext):Future[ISeq[Try[Seq[GlobalEventEnvelope]]]] = {
     val writesStream = writes.toStream
     val globalSeqs = globalSequences(writesStream, globalFrom)
     val batch = writesStream.zip(globalSeqs).map(x => {
       val aw = x._1
       val range = x._2
-      Try(driver.serializeJournal(Atom[BSONDocument](aw, range.from, range.to, driver.useLegacySerialization)))
+      PreparedWrite(aw, Try(driver.serializeJournal(Atom[BSONDocument](aw, range.from, range.to, driver.useLegacySerialization))))
     })
-    Future.sequence(batch.map {
-      case Success(document:BSONDocument) => journal.insert(document, writeConcern).map(writeResultToUnit)
-      case f:Failure[_] => Future.successful(Failure[Unit](f.exception))
-    })
+    Future.sequence(batch.map(pw => pw.document match {
+      case Success(document:BSONDocument) => journal.insert(document, writeConcern).map(writeResultToGlobalEnvelope(pw, _))
+      case f:Failure[_] => Future.successful(Failure[Seq[GlobalEventEnvelope]](f.exception))
+    }))
   }
 
   private[this] def globalSequences(writes: Stream[AtomicWrite], globalFrom: Long): Stream[SeqRange] = writes match {

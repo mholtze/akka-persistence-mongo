@@ -6,7 +6,7 @@ import com.mongodb.casbah.Imports._
 
 import scala.annotation.tailrec
 import scala.concurrent.{ExecutionContext, Future}
-import scala.util.Try
+import scala.util.{Success, Try}
 
 class CasbahPersistenceJournaller(driver: CasbahMongoDriver) extends MongoPersistenceJournallingApi {
 
@@ -31,21 +31,43 @@ class CasbahPersistenceJournaller(driver: CasbahMongoDriver) extends MongoPersis
            .map(driver.deserializeJournal)
 
   import collection.immutable.{Seq => ISeq}
-  private[mongodb] override def batchAppend(writes: ISeq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext):Future[ISeq[Try[Unit]]] = Future {
+
+  private[this] case class PreparedWrite(atomic: AtomicWrite, document: Try[MongoDBObject])
+
+  private[this] def globalEnvelopesFromWrite(pw: PreparedWrite): Seq[GlobalEventEnvelope] = {
+    val events = pw.document.get.getAs[MongoDBList]("events").get
+    pw.atomic.payload.zip(events).map {
+      case (repr, event: DBObject) =>
+        GlobalEventEnvelope(
+          // offset is not very useful in this context, so just set to 0
+          offset = 0L,
+          persistenceId = repr.persistenceId,
+          sequenceNr = repr.sequenceNr,
+          globalSequenceNr = event.getAs[Long](GLOBAL_SEQUENCE_NUMBER).getOrElse(0L),
+          event = repr.payload
+        )
+    }
+  }
+
+  private[mongodb] override def batchAppend(writes: ISeq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext):Future[ISeq[Try[Seq[GlobalEventEnvelope]]]] = Future {
     val globalSeqs = globalSequences(writes, globalFrom)
     val batch = writes.zip(globalSeqs).map(x => {
       val aw = x._1
       val range = x._2
-      Try(driver.serializeJournal(Atom[DBObject](aw, range.from, range.to, driver.useLegacySerialization)))
+      PreparedWrite(aw, Try(driver.serializeJournal(Atom[DBObject](aw, range.from, range.to, driver.useLegacySerialization))))
     })
 
-    if (batch.forall(_.isSuccess)) {
+    if (batch.forall(_.document.isSuccess)) {
       val bulk = journal.initializeOrderedBulkOperation
-      batch.collect { case scala.util.Success(ser) => ser } foreach bulk.insert
+      batch.foreach(pw => bulk.insert(pw.document.get))
       bulk.execute(writeConcern)
-      batch.map(t => t.map(_ => ()))
+      batch.map(t => Success(globalEnvelopesFromWrite(t)))
     } else { // degraded performance, cant batch
-      batch.map(_.map(serialized => journal.insert(serialized)(identity, writeConcern)).map(_ => ()))
+      batch.map(pw =>
+        pw.document
+          .map(serialized => journal.insert(serialized)(identity, writeConcern))
+          .map(_ => globalEnvelopesFromWrite(pw))
+      )
     }
   }
 

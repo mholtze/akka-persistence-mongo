@@ -2,11 +2,12 @@ package akka.contrib.persistence.mongodb
 
 import java.util.concurrent.atomic.AtomicBoolean
 
-import akka.actor.Actor
+import akka.actor.{DeadLetterSuppression, ActorRef, Actor}
 import akka.pattern.{CircuitBreakerOpenException, CircuitBreaker}
 import com.typesafe.config.Config
 
 import scala.collection.immutable
+import scala.collection.mutable
 import akka.persistence.journal.AsyncWriteJournal
 import akka.persistence.{AtomicWrite, PersistentRepr}
 import scala.concurrent.Future
@@ -14,13 +15,15 @@ import scala.concurrent.ExecutionContext
 import nl.grons.metrics.scala.InstrumentedBuilder
 import nl.grons.metrics.scala.Timer
 
-import scala.util.Try
+import scala.util.{Failure, Try, Success}
 import scala.concurrent.duration._
 
 class MongoJournal(config: Config) extends AsyncWriteJournal {
+  import MongoJournal._
   
   private[this] val impl = MongoPersistenceExtension(context.system)(config).journaler
   private[this] implicit val ec = context.dispatcher
+  private[this] val subscribers = new MongoJournalSubscriptions
 
   private[this] var lastGlobalSequenceNr: Long = 0L // fixme load value
 
@@ -81,8 +84,16 @@ class MongoJournal(config: Config) extends AsyncWriteJournal {
    * Note that it is possible to reduce number of allocations by
    * caching some result `Seq` for the happy path, i.e. when no messages are rejected.
    */
-  override def asyncWriteMessages(messages: immutable.Seq[AtomicWrite]): Future[immutable.Seq[Try[Unit]]] =
-    impl.batchAppend(messages, nextGlobalSequenceFrom(messages))
+  override def asyncWriteMessages(messages: immutable.Seq[AtomicWrite]): Future[immutable.Seq[Try[Unit]]] = {
+    val result = impl.batchAppend(messages, nextGlobalSequenceFrom(messages))
+    // fixme
+    //result.onComplete(t => t.foreach(_ => subscribers.notifyEventsPersisted()))
+
+    result.map(results => results.map {
+      case Success(_) => Success(())
+      case Failure(exception) => Failure(exception)
+    })
+  }
 
   /**
    * Plugin API: asynchronously deletes all persistent messages up to `toSequenceNr`
@@ -97,7 +108,10 @@ class MongoJournal(config: Config) extends AsyncWriteJournal {
    * Allows plugin implementers to use `f pipeTo self` and
    * handle additional messages for implementing advanced features
    */
-  override def receivePluginInternal: Actor.Receive = Actor.emptyBehavior // No advanced features yet.  Stay tuned!
+  override def receivePluginInternal: Actor.Receive = {
+    case SubscribeToEvents => subscribers.addEventSubscriber(sender())
+    case UnsubscribeFromEvents => subscribers.removeEventSubscriber(sender())
+  }
 
   /**
    * Plugin API: asynchronously replays persistent messages. Implementations replay
@@ -120,7 +134,7 @@ class MongoJournal(config: Config) extends AsyncWriteJournal {
    * @param replayCallback called to replay a single message. Can be called from any
    *                       thread.
    */
-  override def asyncReplayMessages(processorId: String, fromSequenceNr: Long, toSequenceNr: Long, max: Long)(replayCallback: PersistentRepr ⇒ Unit): Future[Unit] = 
+  override def asyncReplayMessages(processorId: String, fromSequenceNr: Long, toSequenceNr: Long, max: Long)(replayCallback: PersistentRepr ⇒ Unit): Future[Unit] =
   	impl.replayJournal(processorId, fromSequenceNr, toSequenceNr, max)(replayCallback)
 
   /**
@@ -131,9 +145,39 @@ class MongoJournal(config: Config) extends AsyncWriteJournal {
    * @param fromSequenceNr hint where to start searching for the highest sequence
    *                       number.
    */
-  override def asyncReadHighestSequenceNr(processorId: String, fromSequenceNr: Long): Future[Long] = 
+  override def asyncReadHighestSequenceNr(processorId: String, fromSequenceNr: Long): Future[Long] =
     impl.maxSequenceNr(processorId, fromSequenceNr)
 
+}
+
+object MongoJournal {
+  sealed trait SubscriptionCommand
+
+  /** Subscribe the `sender` to new persisted events. */
+  final case object SubscribeToEvents extends SubscriptionCommand
+
+  /** Unsubscribe the `sender` from new persisted events. */
+  final case object UnsubscribeFromEvents extends SubscriptionCommand
+
+  final case class EventsPersisted(events: Seq[GlobalEventEnvelope]) extends DeadLetterSuppression
+}
+
+private[mongodb] class MongoJournalSubscriptions {
+  import MongoJournal._
+
+  private var eventSubscribers = Set.empty[ActorRef]
+
+  def addEventSubscriber(subscriber: ActorRef): Unit =
+    eventSubscribers += subscriber
+
+  def hasEventSubscriber: Boolean = eventSubscribers.nonEmpty
+
+  def removeEventSubscriber(subscriber: ActorRef): Unit = {
+    eventSubscribers -= subscriber
+  }
+
+  def notifyEventsPersisted(envelopes: Seq[GlobalEventEnvelope]): Unit =
+    eventSubscribers.foreach(_ ! EventsPersisted(envelopes))
 }
 
 trait JournallingFieldNames {
@@ -167,7 +211,7 @@ trait JournallingFieldNames {
 object JournallingFieldNames extends JournallingFieldNames
 
 trait MongoPersistenceJournallingApi {
-  private[mongodb] def batchAppend(writes: immutable.Seq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext): Future[immutable.Seq[Try[Unit]]]
+  private[mongodb] def batchAppend(writes: immutable.Seq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext): Future[immutable.Seq[Try[Seq[GlobalEventEnvelope]]]]
 
   private[mongodb] def deleteFrom(persistenceId: String, toSequenceNr: Long)(implicit ec: ExecutionContext): Future[Unit]
 
@@ -195,7 +239,7 @@ trait MongoPersistenceJournalFailFast extends MongoPersistenceJournallingApi {
     else thunk
   }
 
-  private[mongodb] abstract override def batchAppend(writes: immutable.Seq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext): Future[immutable.Seq[Try[Unit]]] =
+  private[mongodb] abstract override def batchAppend(writes: immutable.Seq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext): Future[immutable.Seq[Try[Seq[GlobalEventEnvelope]]]] =
     breaker.withCircuitBreaker(super.batchAppend(writes, globalFrom))
 
   private[mongodb] abstract override def deleteFrom(persistenceId: String, toSequenceNr: Long)(implicit ec: ExecutionContext): Future[Unit] =
@@ -234,7 +278,7 @@ trait MongoPersistenceJournalMetrics extends MongoPersistenceJournallingApi with
     result
   }
   
-  private[mongodb] abstract override def batchAppend(writes: immutable.Seq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext): Future[immutable.Seq[Try[Unit]]] = timeIt (appendTimer) {
+  private[mongodb] abstract override def batchAppend(writes: immutable.Seq[AtomicWrite], globalFrom: Long)(implicit ec: ExecutionContext): Future[immutable.Seq[Try[Seq[GlobalEventEnvelope]]]] = timeIt (appendTimer) {
     writeBatchSize += writes.map(_.size).sum
     super.batchAppend(writes, globalFrom)
   }
@@ -250,4 +294,3 @@ trait MongoPersistenceJournalMetrics extends MongoPersistenceJournallingApi with
     = timeIt (maxTimer) { super.maxSequenceNr(pid, from) }
   
 }
-  
