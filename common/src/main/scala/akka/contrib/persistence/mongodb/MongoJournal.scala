@@ -10,8 +10,7 @@ import scala.collection.immutable
 import scala.collection.mutable
 import akka.persistence.journal.AsyncWriteJournal
 import akka.persistence.{AtomicWrite, PersistentRepr}
-import scala.concurrent.Future
-import scala.concurrent.ExecutionContext
+import scala.concurrent.{Await, Future, ExecutionContext}
 import nl.grons.metrics.scala.InstrumentedBuilder
 import nl.grons.metrics.scala.Timer
 
@@ -25,7 +24,7 @@ class MongoJournal(config: Config) extends AsyncWriteJournal {
   private[this] implicit val ec = context.dispatcher
   private[this] val subscribers = new MongoJournalSubscriptions
 
-  private[this] var lastGlobalSequenceNr: Long = 0L // fixme load value
+  private[this] var lastGlobalSequenceNr: Long = 0L
 
   /**
     * Allocate a block of global sequence numbers to cover the range of messages in the batch and return the
@@ -39,6 +38,22 @@ class MongoJournal(config: Config) extends AsyncWriteJournal {
 
     lastGlobalSequenceNr += eventCount
     globalFrom
+  }
+
+  @throws[Exception](classOf[Exception])
+  override def preStart(): Unit = {
+    super.preStart()
+    if (lastGlobalSequenceNr == 0L) {
+      lastGlobalSequenceNr = Await.result(impl.readHighestGlobalSeqNr, 10.seconds)
+    }
+  }
+
+  private[this] def notifyEventsPersisted(result: Future[immutable.Seq[Try[Seq[GlobalEventEnvelope]]]]): Unit = {
+    result.onComplete {
+      case Success(batch) => batch.foreach(
+        _.foreach(atomic => subscribers.notifyEventsPersisted(atomic))
+      )
+    }
   }
 
   /**
@@ -86,9 +101,9 @@ class MongoJournal(config: Config) extends AsyncWriteJournal {
    */
   override def asyncWriteMessages(messages: immutable.Seq[AtomicWrite]): Future[immutable.Seq[Try[Unit]]] = {
     val result = impl.batchAppend(messages, nextGlobalSequenceFrom(messages))
-    // fixme
-    //result.onComplete(t => t.foreach(_ => subscribers.notifyEventsPersisted()))
-
+    // send persisted messages
+    notifyEventsPersisted(result)
+    // map to Try[Unit]
     result.map(results => results.map {
       case Success(_) => Success(())
       case Failure(exception) => Failure(exception)
