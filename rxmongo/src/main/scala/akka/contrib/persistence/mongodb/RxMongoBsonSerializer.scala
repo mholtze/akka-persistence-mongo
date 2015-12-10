@@ -9,21 +9,21 @@ import reactivemongo.bson.BSONDocument
 /**
   * This Serializer serializes `akka.contrib.persistence.mongodb.BsonMessage`.
   * It is using reflection to find the companion object which must implement
-  * `akka.contrib.persistence.mongodb.RxMongoBsonHandler`.
+  * `akka.contrib.persistence.mongodb.RxMongoBsonReaderWriter`.
   */
 class RxMongoBsonSerializer(val system: ExtendedActorSystem) extends BaseBsonSerializer[BSONDocument] {
 
-  private val bsonHandlerRef = new AtomicReference[Map[Class[_], RxMongoBsonHandler[_]]](Map.empty)
+  private val bsonHandlerRef = new AtomicReference[Map[Class[_], RxMongoBsonReaderWriter[_]]](Map.empty)
 
-  private def companionAsHandler(clazz: Class[_]): RxMongoBsonHandler[_] = {
+  private def companionAsHandler(clazz: Class[_]): RxMongoBsonReaderWriter[_] = {
     val companionName = clazz.getName + "$"
     val companionClass = clazz.getClassLoader.loadClass(companionName)
     val moduleField = companionClass.getField("MODULE$")
     val module = moduleField.get(null)
-    return module.asInstanceOf[RxMongoBsonHandler[_]]
+    return module.asInstanceOf[RxMongoBsonReaderWriter[_]]
   }
 
-  private def companionHandler(clazz: Class[_]): RxMongoBsonHandler[_] = {
+  private def companionHandler(clazz: Class[_]): RxMongoBsonReaderWriter[_] = {
     val bsonHandlers = bsonHandlerRef.get()
     bsonHandlers.get(clazz) match {
       case Some(handler) => handler
@@ -36,7 +36,7 @@ class RxMongoBsonSerializer(val system: ExtendedActorSystem) extends BaseBsonSer
     }
   }
 
-  private def getHandler(manifest: Option[Class[_]]): RxMongoBsonHandler[_] = {
+  private def getHandler(manifest: Option[Class[_]]): RxMongoBsonReaderWriter[_] = {
     manifest match {
       case Some(clazz) ⇒ companionHandler(clazz)
       case None ⇒ throw new IllegalArgumentException("Need a BsonMessage class to be able to serialize BSON")
