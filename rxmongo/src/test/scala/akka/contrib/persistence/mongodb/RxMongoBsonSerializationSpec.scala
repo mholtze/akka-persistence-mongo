@@ -11,7 +11,7 @@ import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.collection.immutable.{Seq => ISeq}
 
-
+// fixme replicate tests for Casbah
 case class BsonSzEvt(value: Int) extends BsonMessage
 
 object BsonSzEvt extends RxMongoBsonReaderWriter[BsonSzEvt] {

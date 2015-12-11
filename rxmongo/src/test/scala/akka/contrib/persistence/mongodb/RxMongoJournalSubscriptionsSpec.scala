@@ -1,0 +1,3 @@
+package akka.contrib.persistence.mongodb
+
+class RxMongoJournalSubscriptionsSpec extends JournalSubscriptionsSpec(classOf[RxMongoPersistenceExtension])

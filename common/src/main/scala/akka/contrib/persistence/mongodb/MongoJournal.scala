@@ -50,9 +50,9 @@ class MongoJournal(config: Config) extends AsyncWriteJournal {
 
   private[this] def notifyEventsPersisted(result: Future[immutable.Seq[Try[Seq[GlobalEventEnvelope]]]]): Unit = {
     result.onComplete {
-      case Success(batch) => batch.foreach(
-        _.foreach(atomic => subscribers.notifyEventsPersisted(atomic))
-      )
+      case Success(batch) => batch.foreach(t => {
+        t.foreach(atomic => subscribers.notifyEventsPersisted(atomic))
+      })
     }
   }
 
