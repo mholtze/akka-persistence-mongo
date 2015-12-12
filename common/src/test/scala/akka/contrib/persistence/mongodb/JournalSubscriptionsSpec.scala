@@ -87,10 +87,11 @@ abstract class JournalSubscriptionsSpec(extensionClass: Class[_]) extends BaseUn
   class SubscriberActor(testActor: ActorRef) extends Actor with ActorLogging {
     val journal = Persistence(context.system).journalFor(journalPluginId)
 
+    journal ! MongoJournal.SubscribeToEvents
+
     @throws[Exception](classOf[Exception])
     override def preStart(): Unit = {
       super.preStart()
-      journal ! MongoJournal.SubscribeToEvents
       self ! "ready"
     }
 
