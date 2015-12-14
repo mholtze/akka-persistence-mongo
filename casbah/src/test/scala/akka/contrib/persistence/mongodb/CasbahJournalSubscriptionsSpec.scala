@@ -1,0 +1,3 @@
+package akka.contrib.persistence.mongodb
+
+class CasbahJournalSubscriptionsSpec extends JournalSubscriptionsSpec(classOf[CasbahPersistenceExtension])
