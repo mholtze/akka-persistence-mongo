@@ -1,20 +1,18 @@
 package akka.contrib.persistence.mongodb
 
-import akka.actor.{Stash, ActorRef}
+import akka.actor.{Props, Stash, ActorRef}
 import akka.persistence.Persistence
 import akka.persistence.query.PersistenceQuery
 import akka.stream.ActorMaterializer
-import akka.stream.actor.ActorPublisher
+import akka.stream.actor.{ActorSubscriber, ActorPublisher}
 import akka.stream.scaladsl.Sink
 import org.reactivestreams.{Subscription, Subscriber}
 
 import scala.annotation.tailrec
 
-// fixme global query: exclude any non global history
+// todo global query: exclude any non global history
 
-class MongoGlobalEventsLiveQuery(
-  globalFrom: Option[Long] = Option.empty,
-  maxBufferSize: Long = 500
+class MongoGlobalEventsLiveQuery(globalFrom: Option[Long], maxBufferSize: Long
 ) extends ActorPublisher[GlobalEventEnvelope] with Stash {
 
   import akka.stream.actor.ActorPublisherMessage._
@@ -30,6 +28,7 @@ class MongoGlobalEventsLiveQuery(
 
   private var allEventsSubscription: Option[Subscription] = Option.empty
   private var transitioningToLive: Boolean = false
+  private var catchupRequested: Long = 0L
 
   self ! globalFrom
   journal ! MongoJournal.SubscribeToEvents
@@ -66,6 +65,7 @@ class MongoGlobalEventsLiveQuery(
       else
         transitionToLiveFromCatchup()
     case AllEventsNext(env: GlobalEventEnvelope) =>
+      catchupRequested -= 1
       addToBuffer(List(env))
       requestCatchup()
     case Request(_) =>
@@ -86,6 +86,7 @@ class MongoGlobalEventsLiveQuery(
     val source = readJournal.allEventsInGlobalOrder(lastGlobalSequenceNr + 1, Long.MaxValue)
     source.runWith(Sink(new AllEventsSubscriber(self)))
 
+    catchupRequested = 0L
     transitioningToLive = transitionToLive
     become(catchup)
   }
@@ -98,9 +99,10 @@ class MongoGlobalEventsLiveQuery(
   }
 
   private def requestCatchup(): Unit = {
-    val remainingCapacity = maxBufferSize - buf.size;
+    val remainingCapacity = maxBufferSize - buf.size - catchupRequested;
     if (remainingCapacity > 0) {
       allEventsSubscription.foreach(_.request(remainingCapacity))
+      catchupRequested += remainingCapacity
     }
   }
 
@@ -108,7 +110,9 @@ class MongoGlobalEventsLiveQuery(
     case MongoJournal.EventsPersisted(events) if buf.size >= maxBufferSize =>
       become(slowConsumer)
     case MongoJournal.EventsPersisted(events) =>
-      if (addToBuffer(events) < events.size) {
+      // under certain circumstances, like testing, live events can arrive after catchup for the same event
+      val eventsToSend = events.filter(_.globalSequenceNr > lastGlobalSequenceNr).toIndexedSeq
+      if (addToBuffer(eventsToSend) < eventsToSend.size) {
         become(slowConsumer)
       }
     case Request(_) => deliverBuf()
@@ -135,9 +139,12 @@ class MongoGlobalEventsLiveQuery(
   }
 
   private def addToBuffer(events: Seq[GlobalEventEnvelope]): Int = {
-    val remaining = (maxBufferSize - buf.size).toInt
+    val remaining = (maxBufferSize - buf.size + totalDemand).toInt
     buf ++= events.take(remaining)
-    (remaining - (maxBufferSize - buf.size)).toInt
+    val added = remaining - (maxBufferSize - buf.size + totalDemand).toInt
+
+    deliverBuf()
+    added
   }
 
   @tailrec final def deliverBuf(): Unit =
@@ -148,20 +155,28 @@ class MongoGlobalEventsLiveQuery(
        */
       if (totalDemand <= Int.MaxValue) {
         val (use, keep) = buf.splitAt(totalDemand.toInt)
-        buf = keep
-        use foreach onNext
-        lastGlobalSequenceNr = use.last.globalSequenceNr
+        if (!use.isEmpty) {
+          buf = keep
+          use foreach onNext
+          lastGlobalSequenceNr = use.last.globalSequenceNr
+        }
       } else {
         val (use, keep) = buf.splitAt(Int.MaxValue)
-        buf = keep
-        use foreach onNext
-        lastGlobalSequenceNr = use.last.globalSequenceNr
-        deliverBuf()
+        if (!use.isEmpty) {
+          buf = keep
+          use foreach onNext
+          lastGlobalSequenceNr = use.last.globalSequenceNr
+          deliverBuf()
+        }
       }
     }
 }
 
 object MongoGlobalEventsLiveQuery {
+  val MaxBufferSize: Long = 500
+  def props(globalFrom: Option[Long] = Option.empty, maxBufferSize: Long = MaxBufferSize): Props =
+      Props(new MongoGlobalEventsLiveQuery(globalFrom, maxBufferSize))
+
   private[mongodb] sealed trait AllEventsSubscriberMessage {}
   private[mongodb] final case class AllEventsNext(element: Any) extends AllEventsSubscriberMessage
   private[mongodb] final case class AllEventsError(cause: Throwable) extends AllEventsSubscriberMessage

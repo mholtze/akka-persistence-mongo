@@ -41,6 +41,13 @@ class ScalaDslMongoReadJournal(impl: MongoPersistenceReadJournallingApi) extends
   def allEventsInGlobalOrder(globalFrom: Long, globalTo: Long): Source[GlobalEventEnvelope, Unit] =
     Source.actorPublisher[GlobalEventEnvelope](impl.allEventsInGlobalOrder(globalFrom, globalTo))
       .mapMaterializedValue(_ => ())
+
+  def liveGlobalEvents(
+    globalFrom: Option[Long] = Option.empty,
+    maxBufferSize: Long = MongoGlobalEventsLiveQuery.MaxBufferSize
+  ): Source[GlobalEventEnvelope, Unit] =
+    Source.actorPublisher[GlobalEventEnvelope](MongoGlobalEventsLiveQuery.props(globalFrom, maxBufferSize))
+      .mapMaterializedValue(_ => ())
 }
 
 class JavaDslMongoReadJournal(rj: ScalaDslMongoReadJournal) extends javadsl.ReadJournal with JCP with JCEBP {
