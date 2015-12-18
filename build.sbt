@@ -1,4 +1,4 @@
-val releaseV = "1.0.11"
+val releaseV = "1.0.12"
 
 val scalaV = "2.11.7"
 
@@ -50,8 +50,10 @@ val commonDeps = Seq(
 val commonSettings = Seq(
   scalaVersion := scalaV,
   libraryDependencies ++= commonDeps,
+  publishTo := Some(Resolver.file("Procuro Repository", file("R:\\")).mavenStyle().transactional()),
   version := releaseV,
-  organization := "com.github.scullxbones",
+  //organization := "com.github.scullxbones",
+  organization := "com.procuro.scullxbones",
   pomExtra := pomXtra,
   scalacOptions ++= Seq(
     "-unchecked",
@@ -111,5 +113,5 @@ lazy val root = (project in file("."))
   .aggregate(`akka-persistence-mongo-common`, `akka-persistence-mongo-casbah`, `akka-persistence-mongo-rxmongo`)
   .settings(commonSettings:_*)
   .settings(
-    packagedArtifacts in file(".") := Map.empty,
-    publishTo := Some(Resolver.file("file", new File("target/unusedrepo"))))
+    packagedArtifacts in file(".") := Map.empty)
+    //publishTo := Some(Resolver.file("file", new File("target/unusedrepo"))))
