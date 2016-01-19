@@ -165,7 +165,7 @@ abstract class ReadJournalSpec[A <: MongoPersistenceExtension](extensionClass: C
       println(s"ee = $ee")
       received :+ ee
     }
-    Await.result(fut,10.seconds).map(_.event) shouldBe ("this" :: "is" :: "just" :: "a" :: "test" :: "END" :: Nil)
+    Await.result(fut,10.seconds).takeRight(events.size).map(_.event) shouldBe ("this" :: "is" :: "just" :: "a" :: "test" :: "END" :: Nil)
   }
 
   it should "support the globally ordered journal dump query with range restrictions" in withConfig(config(extensionClass), "akka-contrib-mongodb-persistence-readjournal") { case (as,_) =>
@@ -185,7 +185,14 @@ abstract class ReadJournalSpec[A <: MongoPersistenceExtension](extensionClass: C
     val readJournal =
       PersistenceQuery(as).readJournalFor[ScalaDslMongoReadJournal](MongoReadJournal.Identifier)
 
-    val fut = readJournal.allEventsInGlobalOrder(2L, 4L).runFold(Seq.empty[GlobalEventEnvelope]){ (received, ee) =>
+    val allGlobal = readJournal.allEventsInGlobalOrder(0L, Long.MaxValue).runFold(Seq.empty[GlobalEventEnvelope]){ (received, ee) =>
+      received :+ ee
+    }
+    val envelopes = Await.result(allGlobal,10.seconds).takeRight(events.size).toIndexedSeq
+
+    val start = envelopes(1).globalSequenceNr
+    val end = envelopes(3).globalSequenceNr
+    val fut = readJournal.allEventsInGlobalOrder(start, end).runFold(Seq.empty[GlobalEventEnvelope]){ (received, ee) =>
       println(s"ee = $ee")
       received :+ ee
     }
