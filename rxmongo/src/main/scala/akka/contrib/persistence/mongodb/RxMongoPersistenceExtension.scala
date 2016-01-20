@@ -30,7 +30,12 @@ object RxMongoPersistenceDriver {
   }
 }
 
-class RxMongoDriver(system: ActorSystem, config: Config) extends MongoPersistenceDriver(system, config) {
+/** Container used to share one lazy MongoDriver for all plugins. */
+class MongoDriverProvider {
+  lazy val driver = MongoDriver()
+}
+
+class RxMongoDriver(system: ActorSystem, config: Config, driverProvider: MongoDriverProvider = new MongoDriverProvider()) extends MongoPersistenceDriver(system, config) {
   import RxMongoPersistenceDriver._
 
   import concurrent.Await
@@ -41,7 +46,7 @@ class RxMongoDriver(system: ActorSystem, config: Config) extends MongoPersistenc
 
   type D = BSONDocument
 
-  private[mongodb] lazy val driver = MongoDriver()
+  private[mongodb] def driver = driverProvider.driver
   private[this] lazy val parsedMongoUri = MongoConnection.parseURI(mongoUri) match {
     case Success(parsed) => parsed
     case Failure(throwable) => throw throwable
@@ -167,11 +172,12 @@ class RxMongoDriver(system: ActorSystem, config: Config) extends MongoPersistenc
 }
 
 class RxMongoPersistenceExtension(actorSystem: ActorSystem) extends MongoPersistenceExtension {
+  val sharedDriver = new MongoDriverProvider
 
   override def configured(config: Config): Configured = Configured(config)
 
   case class Configured(config: Config) extends ConfiguredExtension {
-    val driver = new RxMongoDriver(actorSystem, config)
+    val driver = new RxMongoDriver(actorSystem, config, sharedDriver)
 
     override lazy val journaler = new RxMongoJournaller(driver) with MongoPersistenceJournalMetrics with MongoPersistenceJournalFailFast {
       override def driverName = "rxmongo"
