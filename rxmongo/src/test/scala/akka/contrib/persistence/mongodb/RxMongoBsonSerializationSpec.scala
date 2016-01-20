@@ -19,6 +19,12 @@ object BsonSzEvt extends RxMongoBsonReaderWriter[BsonSzEvt] {
   override def writeBson(t: BsonSzEvt): BSONDocument = BSONDocument("value" -> t.value)
 }
 
+case class BsonSzHandler(value: Int) extends BsonMessage
+
+object BsonSzHandler extends RxMongoBsonHandler[BsonSzHandler] {
+  override implicit val bsonHandler = Macros.handler[BsonSzHandler]
+}
+
 class RxMongoBsonSerializationSpec extends TestKit(ActorSystem("unit-test")) with RxMongoPersistenceSpec {
   import JournallingFieldNames._
 
@@ -48,6 +54,14 @@ class RxMongoBsonSerializationSpec extends TestKit(ActorSystem("unit-test")) wit
     val evt = BsonSzEvt(5)
     val ser = BsonSerialized[BSONDocument](evt)
     val deserialized = ser.content.asInstanceOf[BsonSzEvt]
+    deserialized shouldBe evt
+  } }
+    () }
+
+  it should "handle serialization using a BSON handler" in { new Fixture { withJournal { journal =>
+    val evt = BsonSzHandler(5)
+    val ser = BsonSerialized[BSONDocument](evt)
+    val deserialized = ser.content.asInstanceOf[BsonSzHandler]
     deserialized shouldBe evt
   } }
     () }
