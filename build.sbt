@@ -1,4 +1,4 @@
-val releaseV = "1.0.12"
+val releaseV = "1.0.14"
 
 val scalaV = "2.11.7"
 
@@ -7,7 +7,7 @@ scalaVersion := scalaV
 val AkkaV = "2.4.0"
 
 val pomXtra = {
-  <url>https://github.com/scullxbones/akka-persistence-mongo</url>
+  <url>https://github.com/mholtze/akka-persistence-mongo</url>
     <licenses>
       <license>
         <name>Apache 2</name>
@@ -15,15 +15,15 @@ val pomXtra = {
       </license>
     </licenses>
     <scm>
-      <connection>scm:git:github.com/scullxbones/akka-persistence-mongo.git</connection>
-      <developerConnection>scm:git:git@github.com:scullxbones/akka-persistence-mongo.git</developerConnection>
-      <url>github.com/scullxbones/akka-persistence-mongo.git</url>
+      <connection>scm:git:github.com/mholtze/akka-persistence-mongo.git</connection>
+      <developerConnection>scm:git:git@github.com:mholtze/akka-persistence-mongo.git</developerConnection>
+      <url>github.com/mholtze/akka-persistence-mongo.git</url>
     </scm>
     <developers>
       <developer>
-        <id>scullxbones</id>
-        <name>Brian Scully</name>
-        <url>https://github.com/scullxbones/</url>
+        <id>mholtze</id>
+        <name>Mark Holtze</name>
+        <url>https://github.com/mholtze/</url>
       </developer>
     </developers>
 }
